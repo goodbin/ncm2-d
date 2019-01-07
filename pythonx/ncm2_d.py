@@ -5,6 +5,8 @@ from ncm2 import Ncm2Source, getLogger
 from distutils.spawn import find_executable
 import re
 import subprocess
+import json
+import os
 
 
 logger = getLogger(__name__)
@@ -33,6 +35,35 @@ class Source(Ncm2Source):
             "t": "template",
             "T": "mixin template",
         }
+        self.dcd_inc_dirs = self.load_inc_dirs()
+
+
+    def load_inc_dirs(self):
+        proc = subprocess.Popen(
+            args=["dub", "describe"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+        result, errs = proc.communicate(timeout=10)
+        if errs:
+            logger.error(errs)
+        try:
+            data = json.loads(result.decode())
+            imports = self.get_dub_package_imports(data)
+            return list(map(lambda x: "-I%s" % x, imports))
+        except Exception as e:
+            logger.error(e)
+
+
+    def get_dub_package_imports(self, describe):
+        out = []
+        for dub_pack_json in describe['packages']:
+            pack_path = dub_pack_json['path']
+            for import_pack in dub_pack_json["importPaths"]:
+                out.append(os.path.normpath(
+                    os.path.join(pack_path, import_pack)))
+        return out
+
 
     def check(self):
         data = self.nvim.call("ncm2_d#data")
@@ -45,8 +76,8 @@ class Source(Ncm2Source):
                     ),
                 )
 
-    def on_complete(self, ctx, data, lines):
 
+    def on_complete(self, ctx, data, lines):
         src = "\n".join(lines)
         src = self.get_src(src, ctx)
         lnum = ctx["lnum"]
@@ -60,7 +91,7 @@ class Source(Ncm2Source):
 
         dcd_client = find_executable(data["dcd_client_bin"])
         args = [dcd_client, "-x", "-c" + str(offset)]
-        args.extend(data["dcd_inc_dirs"])
+        args.extend(self.dcd_inc_dirs)
         proc = subprocess.Popen(
             args=args,
             stdin=subprocess.PIPE,
@@ -107,8 +138,8 @@ class Source(Ncm2Source):
         logger.debug("startccol %s, matches %s", startccol, matches)
         self.complete(ctx, startccol, matches)
 
-    def render_snippet(self, item):
 
+    def render_snippet(self, item):
         # function (and template ) snippet support
         m = re_func.search(item.get("menu", ""))
         if not m:
@@ -146,6 +177,7 @@ class Source(Ncm2Source):
         ud["snippet"] = item["word"] + "(" + ", ".join(snip_params) + ")${0}"
         logger.debug("final snippet: %s", ud)
 
+
     def snippet_placeholder(self, ultisnip_num, txt=""):
         txt = txt.replace("\\", "\\\\")
         txt = txt.replace("$", r"\$")
@@ -158,3 +190,4 @@ class Source(Ncm2Source):
 source = Source(vim)
 on_complete = source.on_complete
 source.check()
+
